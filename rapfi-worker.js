@@ -46,7 +46,6 @@ function waitReady() {
   return new Promise(function(r){ readyResolvers.push(r); });
 }
 
-// ★ 解壓 lz4 並寫入 FS
 async function fetchToFS(url, fsName) {
   try {
     var resp = await fetch(url);
@@ -60,20 +59,19 @@ async function fetchToFS(url, fsName) {
 
     if (!Module || !Module.FS) throw new Error('Module.FS not ready');
     Module.FS.writeFile('/' + fsName, data);
-    self.postMessage({ type: 'status', text: '✓ ' + fsName });
+    self.postMessage({ type: 'status', text: '\u2713 ' + fsName });
   } catch(e) {
-    self.postMessage({ type: 'status', text: '⚠ 略過 ' + fsName + ': ' + e.message });
+    self.postMessage({ type: 'status', text: '\u26a0 \u7565\u904e ' + fsName + ': ' + e.message });
   }
 }
 
-// ★ LZ4 Block 解壓
 function decodeLZ4(src) {
   var srcLen = src.length;
   var srcPos = 0;
 
   if (src[0] === 0x04 && src[1] === 0x22 && src[2] === 0x4D && src[3] === 0x18) {
-    var flg = src[4];
     srcPos = 7;
+    var flg = src[4];
     if (flg & 0x08) srcPos += 8;
   }
 
@@ -145,7 +143,7 @@ function decodeLZ4Block(src, srcStart, srcLen) {
 
 async function initEngine(rule) {
   currentRule = (rule === undefined) ? 0 : rule;
-  self.postMessage({ type: 'status', text: '載入 WASM...' });
+  self.postMessage({ type: 'status', text: '\u8f09\u5165 WASM...' });
   importScripts('./rapfi-multi-simd128-relaxed.js');
 
   await new Promise(function(resolve) {
@@ -154,18 +152,19 @@ async function initEngine(rule) {
     }, 30);
   });
 
-  self.postMessage({ type: 'status', text: '初始化引擎...' });
+  self.postMessage({ type: 'status', text: '\u521d\u59cb\u5316\u5f15\u64ce...' });
 
-  // ✅ 修正：直接在 onRuntimeInitialized callback 裡賦值給 Module
+  // ✅ 關鍵修正：用 cfg 變數捕捉 Module，Emscripten 會把 FS 掛在 cfg 上
   await new Promise(function(resolve) {
-    Rapfi({
+    var cfg = {
       print:    function(t){ handleLine(t); },
-      printErr: function(t){ /* 忽略 stderr */ },
+      printErr: function(t){},
       onRuntimeInitialized: function() {
-        Module = this;
+        Module = cfg;
         resolve();
       }
-    });
+    };
+    Rapfi(cfg);
   });
 
   var configName, nnueFiles;
@@ -183,7 +182,7 @@ async function initEngine(rule) {
   }
 
   await fetchToFS('./nnue/' + configName, 'config.toml');
-  self.postMessage({ type: 'status', text: '載入模型...' });
+  self.postMessage({ type: 'status', text: '\u8f09\u5165\u6a21\u578b...' });
 
   for (var i = 0; i < nnueFiles.length; i++) {
     await fetchToFS('./nnue/' + nnueFiles[i].url, nnueFiles[i].fs);
