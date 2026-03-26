@@ -46,16 +46,110 @@ function waitReady() {
   return new Promise(function(r){ readyResolvers.push(r); });
 }
 
-async function fetchToFS(url, name) {
+// ★ 解壓 lz4 並寫入 FS（支援 .lz4 與一般 .bin）
+async function fetchToFS(url, fsName) {
   try {
     var resp = await fetch(url);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var buf = await resp.arrayBuffer();
-    Module.FS.writeFile('/' + name, new Uint8Array(buf));
-    self.postMessage({ type: 'status', text: '✓ ' + name });
+    var data = new Uint8Array(buf);
+
+    // 若是 lz4 檔，先解壓
+    if (url.endsWith('.lz4')) {
+      data = decodeLZ4(data);
+    }
+
+    Module.FS.writeFile('/' + fsName, data);
+    self.postMessage({ type: 'status', text: '✓ ' + fsName });
   } catch(e) {
-    self.postMessage({ type: 'status', text: '⚠ 略過 ' + name + ': ' + e.message });
+    self.postMessage({ type: 'status', text: '⚠ 略過 ' + fsName + ': ' + e.message });
   }
+}
+
+// ★ LZ4 Block 解壓（純 JS 實作，不需外部函式庫）
+function decodeLZ4(src) {
+  var srcLen = src.length;
+  var srcPos = 0;
+
+  // 跳過 lz4 frame header（magic = 0x184D2204）
+  if (src[0] === 0x04 && src[1] === 0x22 && src[2] === 0x4D && src[3] === 0x18) {
+    srcPos = 7; // magic(4) + FLG(1) + BD(1) + HC(1)
+    // 若有 content size 欄位（FLG bit3）
+    var flg = src[4];
+    if (flg & 0x08) srcPos += 8;
+  }
+
+  var chunks = [];
+  var totalLen = 0;
+
+  while (srcPos < srcLen) {
+    // 讀 block size（4 bytes LE）
+    var blockSize = src[srcPos] | (src[srcPos+1]<<8) | (src[srcPos+2]<<16) | (src[srcPos+3]<<24);
+    srcPos += 4;
+    if (blockSize === 0) break; // end mark
+
+    var isUncompressed = (blockSize & 0x80000000) !== 0;
+    blockSize = blockSize & 0x7FFFFFFF;
+
+    if (isUncompressed) {
+      chunks.push(src.slice(srcPos, srcPos + blockSize));
+      totalLen += blockSize;
+    } else {
+      var block = decodeLZ4Block(src, srcPos, blockSize);
+      chunks.push(block);
+      totalLen += block.length;
+    }
+    srcPos += blockSize;
+  }
+
+  // 合併所有 chunk
+  var result = new Uint8Array(totalLen);
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    result.set(chunks[i], offset);
+    offset += chunks[i].length;
+  }
+  return result;
+}
+
+function decodeLZ4Block(src, srcStart, srcLen) {
+  var dst = [];
+  var srcPos = srcStart;
+  var srcEnd = srcStart + srcLen;
+
+  while (srcPos < srcEnd) {
+    var token = src[srcPos++];
+    var litLen = (token >> 4) & 0xF;
+    var matchLen = token & 0xF;
+
+    // 讀取延伸 literal length
+    if (litLen === 15) {
+      var extra;
+      do { extra = src[srcPos++]; litLen += extra; } while (extra === 255);
+    }
+
+    // 複製 literals
+    for (var i = 0; i < litLen; i++) dst.push(src[srcPos++]);
+
+    if (srcPos >= srcEnd) break;
+
+    // 讀 offset（2 bytes LE）
+    var offset = src[srcPos] | (src[srcPos+1] << 8);
+    srcPos += 2;
+
+    // 讀取延伸 match length
+    matchLen += 4;
+    if ((token & 0xF) === 15) {
+      var extra2;
+      do { extra2 = src[srcPos++]; matchLen += extra2; } while (extra2 === 255);
+    }
+
+    // 複製 match
+    var matchPos = dst.length - offset;
+    for (var j = 0; j < matchLen; j++) dst.push(dst[matchPos + j]);
+  }
+
+  return new Uint8Array(dst);
 }
 
 async function initEngine(rule) {
@@ -79,28 +173,25 @@ async function initEngine(rule) {
     });
   });
 
-  // ★ 根據 rule 決定 config 與模型
   var configName, nnueFiles;
   if (currentRule === 1) {
     configName = 'gomocalc-classical220723.toml';
-    nnueFiles = [
-      'classical220723.bin'
-    ];
+    nnueFiles  = [{ url: 'classical220723.bin', fs: 'classical220723.bin' }];
   } else {
     configName = 'gomocalc-mix9svq.toml';
-    nnueFiles = [
-      'mix9svqfreestyle_bsmix.bin.lz4',
-      'mix9svqstandard_bs15.bin.lz4',
-      'mix9svqrenju_bs15_black.bin.lz4',
-      'mix9svqrenju_bs15_white.bin.lz4'
+    nnueFiles  = [
+      { url: 'mix9svqfreestyle_bsmix.bin.lz4',    fs: 'mix9svqfreestyle_bsmix.bin' },
+      { url: 'mix9svqstandard_bs15.bin.lz4',       fs: 'mix9svqstandard_bs15.bin' },
+      { url: 'mix9svqrenju_bs15_black.bin.lz4',    fs: 'mix9svqrenju_bs15_black.bin' },
+      { url: 'mix9svqrenju_bs15_white.bin.lz4',    fs: 'mix9svqrenju_bs15_white.bin' }
     ];
   }
 
   await fetchToFS('./nnue/' + configName, 'config.toml');
-
   self.postMessage({ type: 'status', text: '載入模型...' });
+
   for (var i = 0; i < nnueFiles.length; i++) {
-    await fetchToFS('./nnue/' + nnueFiles[i], nnueFiles[i]);
+    await fetchToFS('./nnue/' + nnueFiles[i].url, nnueFiles[i].fs);
   }
 
   cmd('isready');
@@ -137,7 +228,6 @@ function requestMove(moves, boardSize, timeLimit) {
 self.onmessage = async function(e) {
   var d = e.data;
   switch (d.type) {
-
     case 'init':
       try { await initEngine(d.rule); }
       catch(err) { self.postMessage({ type:'error', text: String(err) }); }
