@@ -37,8 +37,9 @@ function handleLine(line) {
   self.postMessage({ type: 'debug', text: line });
 }
 
+// ✅ 正確：用 sendCommand，不是 stdin_push
 function cmd(s) {
-  if (Module && Module.stdin_push) Module.stdin_push(s + '\n');
+  if (Module && Module.sendCommand) Module.sendCommand(s + '\n');
 }
 
 function waitReady() {
@@ -46,146 +47,33 @@ function waitReady() {
   return new Promise(function(r){ readyResolvers.push(r); });
 }
 
-async function fetchToFS(url, fsName) {
-  try {
-    var resp = await fetch(url);
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    var buf = await resp.arrayBuffer();
-    var data = new Uint8Array(buf);
-
-    if (url.endsWith('.lz4')) {
-      data = decodeLZ4(data);
-    }
-
-    if (!Module || !Module.FS) throw new Error('Module.FS not ready');
-    Module.FS.writeFile('/' + fsName, data);
-    self.postMessage({ type: 'status', text: '\u2713 ' + fsName });
-  } catch(e) {
-    self.postMessage({ type: 'status', text: '\u26a0 \u7565\u904e ' + fsName + ': ' + e.message });
-  }
-}
-
-function decodeLZ4(src) {
-  var srcLen = src.length;
-  var srcPos = 0;
-
-  if (src[0] === 0x04 && src[1] === 0x22 && src[2] === 0x4D && src[3] === 0x18) {
-    srcPos = 7;
-    var flg = src[4];
-    if (flg & 0x08) srcPos += 8;
-  }
-
-  var chunks = [];
-  var totalLen = 0;
-
-  while (srcPos < srcLen) {
-    var blockSize = src[srcPos] | (src[srcPos+1]<<8) | (src[srcPos+2]<<16) | (src[srcPos+3]<<24);
-    srcPos += 4;
-    if (blockSize === 0) break;
-
-    var isUncompressed = (blockSize & 0x80000000) !== 0;
-    blockSize = blockSize & 0x7FFFFFFF;
-
-    if (isUncompressed) {
-      chunks.push(src.slice(srcPos, srcPos + blockSize));
-      totalLen += blockSize;
-    } else {
-      var block = decodeLZ4Block(src, srcPos, blockSize);
-      chunks.push(block);
-      totalLen += block.length;
-    }
-    srcPos += blockSize;
-  }
-
-  var result = new Uint8Array(totalLen);
-  var offset = 0;
-  for (var i = 0; i < chunks.length; i++) {
-    result.set(chunks[i], offset);
-    offset += chunks[i].length;
-  }
-  return result;
-}
-
-function decodeLZ4Block(src, srcStart, srcLen) {
-  var dst = [];
-  var srcPos = srcStart;
-  var srcEnd = srcStart + srcLen;
-
-  while (srcPos < srcEnd) {
-    var token = src[srcPos++];
-    var litLen = (token >> 4) & 0xF;
-    var matchLen = token & 0xF;
-
-    if (litLen === 15) {
-      var extra;
-      do { extra = src[srcPos++]; litLen += extra; } while (extra === 255);
-    }
-
-    for (var i = 0; i < litLen; i++) dst.push(src[srcPos++]);
-
-    if (srcPos >= srcEnd) break;
-
-    var offset = src[srcPos] | (src[srcPos+1] << 8);
-    srcPos += 2;
-
-    matchLen += 4;
-    if ((token & 0xF) === 15) {
-      var extra2;
-      do { extra2 = src[srcPos++]; matchLen += extra2; } while (extra2 === 255);
-    }
-
-    var matchPos = dst.length - offset;
-    for (var j = 0; j < matchLen; j++) dst.push(dst[matchPos + j]);
-  }
-
-  return new Uint8Array(dst);
-}
-
 async function initEngine(rule) {
   currentRule = (rule === undefined) ? 0 : rule;
-  self.postMessage({ type: 'status', text: '\u8f09\u5165 WASM...' });
+  self.postMessage({ type: 'status', text: '載入 WASM...' });
+
   importScripts('./rapfi-multi-simd128-relaxed.js');
 
+  // 等 Rapfi 函式出現
   await new Promise(function(resolve) {
     var t = setInterval(function(){
       if (typeof Rapfi !== 'undefined') { clearInterval(t); resolve(); }
     }, 30);
   });
 
-  self.postMessage({ type: 'status', text: '\u521d\u59cb\u5316\u5f15\u64ce...' });
+  self.postMessage({ type: 'status', text: '初始化引擎...' });
 
-  // ✅ 關鍵修正：用 cfg 變數捕捉 Module，Emscripten 會把 FS 掛在 cfg 上
-  await new Promise(function(resolve) {
-    var cfg = {
-      print:    function(t){ handleLine(t); },
-      printErr: function(t){},
-      onRuntimeInitialized: function() {
-        Module = cfg;
-        resolve();
-      }
-    };
-    Rapfi(cfg);
+  // ✅ 關鍵修正：
+  // 1. await Rapfi()，因為它是 async function
+  // 2. 用 onReceiveStdout，不是 print
+  // 3. 不需要手動 fetchToFS，模型已打包在 .data 檔裡
+  Module = await Rapfi({
+    onReceiveStdout: function(t) { handleLine(t); },
+    onReceiveStderr: function(t) { /* 忽略 stderr */ }
   });
 
-  var configName, nnueFiles;
+  // 設定規則（如果需要切換）
   if (currentRule === 1) {
-    configName = 'gomocalc-classical220723.toml';
-    nnueFiles  = [{ url: 'classical220723.bin', fs: 'classical220723.bin' }];
-  } else {
-    configName = 'gomocalc-mix9svq.toml';
-    nnueFiles  = [
-      { url: 'mix9svqfreestyle_bsmix.bin.lz4',    fs: 'mix9svqfreestyle_bsmix.bin' },
-      { url: 'mix9svqstandard_bs15.bin.lz4',       fs: 'mix9svqstandard_bs15.bin' },
-      { url: 'mix9svqrenju_bs15_black.bin.lz4',    fs: 'mix9svqrenju_bs15_black.bin' },
-      { url: 'mix9svqrenju_bs15_white.bin.lz4',    fs: 'mix9svqrenju_bs15_white.bin' }
-    ];
-  }
-
-  await fetchToFS('./nnue/' + configName, 'config.toml');
-  self.postMessage({ type: 'status', text: '\u8f09\u5165\u6a21\u578b...' });
-
-  for (var i = 0; i < nnueFiles.length; i++) {
-    await fetchToFS('./nnue/' + nnueFiles[i].url, nnueFiles[i].fs);
+    cmd('config classical220723.toml');
   }
 
   cmd('isready');
