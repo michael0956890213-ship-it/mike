@@ -46,7 +46,6 @@ function waitReady() {
   return new Promise(function(r){ readyResolvers.push(r); });
 }
 
-// ★ 解壓 lz4 並寫入 FS（支援 .lz4 與一般 .bin）
 async function fetchToFS(url, fsName) {
   try {
     var resp = await fetch(url);
@@ -54,11 +53,11 @@ async function fetchToFS(url, fsName) {
     var buf = await resp.arrayBuffer();
     var data = new Uint8Array(buf);
 
-    // 若是 lz4 檔，先解壓
     if (url.endsWith('.lz4')) {
       data = decodeLZ4(data);
     }
 
+    if (!Module || !Module.FS) throw new Error('Module.FS not ready');
     Module.FS.writeFile('/' + fsName, data);
     self.postMessage({ type: 'status', text: '✓ ' + fsName });
   } catch(e) {
@@ -66,16 +65,13 @@ async function fetchToFS(url, fsName) {
   }
 }
 
-// ★ LZ4 Block 解壓（純 JS 實作，不需外部函式庫）
 function decodeLZ4(src) {
   var srcLen = src.length;
   var srcPos = 0;
 
-  // 跳過 lz4 frame header（magic = 0x184D2204）
   if (src[0] === 0x04 && src[1] === 0x22 && src[2] === 0x4D && src[3] === 0x18) {
-    srcPos = 7; // magic(4) + FLG(1) + BD(1) + HC(1)
-    // 若有 content size 欄位（FLG bit3）
     var flg = src[4];
+    srcPos = 7;
     if (flg & 0x08) srcPos += 8;
   }
 
@@ -83,10 +79,9 @@ function decodeLZ4(src) {
   var totalLen = 0;
 
   while (srcPos < srcLen) {
-    // 讀 block size（4 bytes LE）
     var blockSize = src[srcPos] | (src[srcPos+1]<<8) | (src[srcPos+2]<<16) | (src[srcPos+3]<<24);
     srcPos += 4;
-    if (blockSize === 0) break; // end mark
+    if (blockSize === 0) break;
 
     var isUncompressed = (blockSize & 0x80000000) !== 0;
     blockSize = blockSize & 0x7FFFFFFF;
@@ -102,7 +97,6 @@ function decodeLZ4(src) {
     srcPos += blockSize;
   }
 
-  // 合併所有 chunk
   var result = new Uint8Array(totalLen);
   var offset = 0;
   for (var i = 0; i < chunks.length; i++) {
@@ -122,29 +116,24 @@ function decodeLZ4Block(src, srcStart, srcLen) {
     var litLen = (token >> 4) & 0xF;
     var matchLen = token & 0xF;
 
-    // 讀取延伸 literal length
     if (litLen === 15) {
       var extra;
       do { extra = src[srcPos++]; litLen += extra; } while (extra === 255);
     }
 
-    // 複製 literals
     for (var i = 0; i < litLen; i++) dst.push(src[srcPos++]);
 
     if (srcPos >= srcEnd) break;
 
-    // 讀 offset（2 bytes LE）
     var offset = src[srcPos] | (src[srcPos+1] << 8);
     srcPos += 2;
 
-    // 讀取延伸 match length
     matchLen += 4;
     if ((token & 0xF) === 15) {
       var extra2;
       do { extra2 = src[srcPos++]; matchLen += extra2; } while (extra2 === 255);
     }
 
-    // 複製 match
     var matchPos = dst.length - offset;
     for (var j = 0; j < matchLen; j++) dst.push(dst[matchPos + j]);
   }
@@ -165,11 +154,12 @@ async function initEngine(rule) {
 
   self.postMessage({ type: 'status', text: '初始化引擎...' });
 
+  // ✅ 關鍵修正：用變數 m 而非 this
   Module = await new Promise(function(resolve) {
-    Rapfi({
+    var m = Rapfi({
       print:    function(t){ handleLine(t); },
-      printErr: function(t){ /* 忽略 stderr */ },
-      onRuntimeInitialized: function() { resolve(this); }
+      printErr: function(t){},
+      onRuntimeInitialized: function() { resolve(m); }
     });
   });
 
@@ -180,10 +170,10 @@ async function initEngine(rule) {
   } else {
     configName = 'gomocalc-mix9svq.toml';
     nnueFiles  = [
-      { url: 'mix9svqfreestyle_bsmix.bin.lz4',    fs: 'mix9svqfreestyle_bsmix.bin' },
-      { url: 'mix9svqstandard_bs15.bin.lz4',       fs: 'mix9svqstandard_bs15.bin' },
-      { url: 'mix9svqrenju_bs15_black.bin.lz4',    fs: 'mix9svqrenju_bs15_black.bin' },
-      { url: 'mix9svqrenju_bs15_white.bin.lz4',    fs: 'mix9svqrenju_bs15_white.bin' }
+      { url: 'mix9svqfreestyle_bsmix.bin.lz4',  fs: 'mix9svqfreestyle_bsmix.bin' },
+      { url: 'mix9svqstandard_bs15.bin.lz4',     fs: 'mix9svqstandard_bs15.bin' },
+      { url: 'mix9svqrenju_bs15_black.bin.lz4',  fs: 'mix9svqrenju_bs15_black.bin' },
+      { url: 'mix9svqrenju_bs15_white.bin.lz4',  fs: 'mix9svqrenju_bs15_white.bin' }
     ];
   }
 
