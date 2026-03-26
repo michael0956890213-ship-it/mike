@@ -10,7 +10,6 @@ function handleLine(line) {
   line = line.trim();
   if (!line) return;
 
-  // 落子座標回傳（格式：col,row）
   if (/^\d+,\d+$/.test(line)) {
     var p = line.split(',');
     if (pendingMove) {
@@ -21,7 +20,6 @@ function handleLine(line) {
     return;
   }
 
-  // 嘗試從 info 行解析分數（格式：info ... score <N> ...）
   var scoreMatch = line.match(/\bscore\s+(-?\d+)/i);
   if (scoreMatch && pendingMove) {
     pendingMove.lastScore = parseInt(scoreMatch[1], 10);
@@ -65,7 +63,6 @@ async function initEngine(rule) {
   self.postMessage({ type: 'status', text: '載入 WASM...' });
   importScripts('./rapfi-multi-simd128-relaxed.js');
 
-  // 等待 Rapfi 函式出現
   await new Promise(function(resolve) {
     var t = setInterval(function(){
       if (typeof Rapfi !== 'undefined') { clearInterval(t); resolve(); }
@@ -74,7 +71,6 @@ async function initEngine(rule) {
 
   self.postMessage({ type: 'status', text: '初始化引擎...' });
 
-  // 等待 onRuntimeInitialized 確保 FS 已就緒
   Module = await new Promise(function(resolve) {
     Rapfi({
       print:    function(t){ handleLine(t); },
@@ -83,20 +79,26 @@ async function initEngine(rule) {
     });
   });
 
-  var configName = currentRule === 1
-    ? 'gomocalc-classical220723.toml'
-    : 'gomocalc-mix9svq.toml';
+  // ★ 根據 rule 決定 config 與模型
+  var configName, nnueFiles;
+  if (currentRule === 1) {
+    configName = 'gomocalc-classical220723.toml';
+    nnueFiles = [
+      'classical220723.bin'
+    ];
+  } else {
+    configName = 'gomocalc-mix9svq.toml';
+    nnueFiles = [
+      'mix9svqfreestyle_bsmix.bin.lz4',
+      'mix9svqstandard_bs15.bin.lz4',
+      'mix9svqrenju_bs15_black.bin.lz4',
+      'mix9svqrenju_bs15_white.bin.lz4'
+    ];
+  }
+
   await fetchToFS('./nnue/' + configName, 'config.toml');
 
   self.postMessage({ type: 'status', text: '載入模型...' });
-
-  var nnueFiles = [
-    'mix9svqfreestyle_bsmix.bin.lz4',
-    'mix9svqstandard_bs15.bin.lz4',
-    'mix9svqrenju_bs15_black.bin.lz4',
-    'mix9svqrenju_bs15_white.bin.lz4',
-    'classical220723.bin'
-  ];
   for (var i = 0; i < nnueFiles.length; i++) {
     await fetchToFS('./nnue/' + nnueFiles[i], nnueFiles[i]);
   }
@@ -106,14 +108,12 @@ async function initEngine(rule) {
   self.postMessage({ type: 'ready' });
 }
 
-// ★ 核心：move 與 hint 完全共用同一函式，保證引擎指令一致
 function requestMove(moves, boardSize, timeLimit) {
   return new Promise(function(resolve) {
     var sz = boardSize || 15;
     var timeSec = Math.max(1, Math.round((timeLimit || 3000) / 1000));
     var turn = (moves.length % 2 === 0) ? 'black' : 'white';
 
-    // 設定好 pendingMove（含 lastScore 暫存）
     pendingMove = {
       lastScore: null,
       resolve: function(pos) {
@@ -123,7 +123,6 @@ function requestMove(moves, boardSize, timeLimit) {
       }
     };
 
-    // 送出指令序列
     cmd('boardsize ' + sz);
     cmd('clearboard');
     for (var i = 0; i < moves.length; i++) {
@@ -151,7 +150,6 @@ self.onmessage = async function(e) {
       catch(err) { self.postMessage({ type:'error', text: String(err) }); }
       break;
 
-    // AI 走棋
     case 'move':
       try {
         var result = await requestMove(d.board, d.boardSize, d.timeLimit);
@@ -161,7 +159,6 @@ self.onmessage = async function(e) {
       }
       break;
 
-    // 提示（與 move 完全相同的引擎指令 → 結果一致）
     case 'hint':
       try {
         var result = await requestMove(d.board, d.boardSize, d.timeLimit);
