@@ -37,7 +37,7 @@ function handleLine(line) {
   self.postMessage({ type: 'debug', text: line });
 }
 
-// ✅ 正確：用 sendCommand，不是 stdin_push
+// 使用 sendCommand 發送指令
 function cmd(s) {
   if (Module && Module.sendCommand) Module.sendCommand(s + '\n');
 }
@@ -62,10 +62,7 @@ async function initEngine(rule) {
 
   self.postMessage({ type: 'status', text: '初始化引擎...' });
 
-  // ✅ 關鍵修正：
-  // 1. await Rapfi()，因為它是 async function
-  // 2. 用 onReceiveStdout，不是 print
-  // 3. 不需要手動 fetchToFS，模型已打包在 .data 檔裡
+  // 直接 await Rapfi，並使用 onReceiveStdout
   Module = await Rapfi({
     onReceiveStdout: function(t) { handleLine(t); },
     onReceiveStderr: function(t) { /* 忽略 stderr */ }
