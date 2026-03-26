@@ -344,6 +344,8 @@ function onWorkerMsg(e) {
 
     case 'status':
       setMsg(d.text);
+      if (d.text && d.text.includes('就緒')) setStatus('ready', d.text);
+      else setStatus('loading', d.text);
       break;
 
     case 'ready':
@@ -387,12 +389,17 @@ function onWorkerMsg(e) {
       break;
 
     case 'debug':
+      // 顯示 debug 訊息在 msg-box 方便排查
+      if (d.text && d.text.includes('[err]')) {
+        setMsg('⚠ ' + d.text);
+      }
       break;
 
     case 'error':
       thinking = false;
       hideOverlay();
-      setStatus('error', '引擎錯誤: ' + d.text);
+      setStatus('error', '引擎錯誤');
+      setMsg('❌ ' + d.text);
       refreshButtons();
       break;
   }
