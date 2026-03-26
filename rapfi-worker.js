@@ -9,14 +9,24 @@ var currentRule = 0;
 function handleLine(line) {
   line = line.trim();
   if (!line) return;
+
+  // 落子座標回傳（格式：col,row）
   if (/^\d+,\d+$/.test(line)) {
     var p = line.split(',');
     if (pendingMove) {
-      var cb = pendingMove; pendingMove = null;
+      var cb = pendingMove;
+      pendingMove = null;
       cb.resolve({ c: parseInt(p[0], 10), r: parseInt(p[1], 10) });
     }
     return;
   }
+
+  // 嘗試從 info 行解析分數（格式：info ... score <N> ...）
+  var scoreMatch = line.match(/\bscore\s+(-?\d+)/i);
+  if (scoreMatch && pendingMove) {
+    pendingMove.lastScore = parseInt(scoreMatch[1], 10);
+  }
+
   if (line === 'OK') {
     if (!engineReady) {
       engineReady = true;
@@ -25,6 +35,7 @@ function handleLine(line) {
     }
     return;
   }
+
   self.postMessage({ type: 'debug', text: line });
 }
 
@@ -53,87 +64,109 @@ async function initEngine(rule) {
   currentRule = (rule === undefined) ? 0 : rule;
   self.postMessage({ type: 'status', text: '載入 WASM...' });
   importScripts('./rapfi-multi-simd128-relaxed.js');
+
+  // 等待 Rapfi 函式出現
   await new Promise(function(resolve) {
     var t = setInterval(function(){
       if (typeof Rapfi !== 'undefined') { clearInterval(t); resolve(); }
     }, 30);
   });
-  self.postMessage({ type: 'status', text: '初始化引擎...' });
-  Module = await Rapfi({
-    print:    function(t){ handleLine(t); },
-    printErr: function(t){ },
-  });
-  if (!Module.calledRun) {
-    await new Promise(function(resolve){ Module.onRuntimeInitialized = resolve; });
-  }
 
-  // 根據規則載入對應 config
-  var configName;
-  if (currentRule === 1) {
-    configName = 'gomocalc-classical220723.toml';
-  } else {
-    configName = 'gomocalc-mix9svq.toml';
-  }
+  self.postMessage({ type: 'status', text: '初始化引擎...' });
+
+  // 等待 onRuntimeInitialized 確保 FS 已就緒
+  Module = await new Promise(function(resolve) {
+    Rapfi({
+      print:    function(t){ handleLine(t); },
+      printErr: function(t){ /* 忽略 stderr */ },
+      onRuntimeInitialized: function() { resolve(this); }
+    });
+  });
+
+  var configName = currentRule === 1
+    ? 'gomocalc-classical220723.toml'
+    : 'gomocalc-mix9svq.toml';
   await fetchToFS('./nnue/' + configName, 'config.toml');
 
-  // 載入 model bin
   self.postMessage({ type: 'status', text: '載入模型...' });
-  await fetchToFS('./nnue/model210901.bin', 'model210901.bin');
-  await fetchToFS('./nnue/model220723.bin', 'model220723.bin');
 
-  // 載入 NNUE 權重
-  self.postMessage({ type: 'status', text: '載入 NNUE 權重...' });
-  await fetchToFS('./nnue/mix9svqfreestyle_bsmix.bin.lz4',    'mix9svqfreestyle_bsmix.bin.lz4');
-  await fetchToFS('./nnue/mix9svqstandard_bs15.bin.lz4',      'mix9svqstandard_bs15.bin.lz4');
-  await fetchToFS('./nnue/mix9svqrenju_bs15_black.bin.lz4',   'mix9svqrenju_bs15_black.bin.lz4');
-  await fetchToFS('./nnue/mix9svqrenju_bs15_white.bin.lz4',   'mix9svqrenju_bs15_white.bin.lz4');
-
-  cmd('START 15');
-  cmd('INFO rule ' + currentRule);
-  cmd('INFO timeout_turn 5000');
-  cmd('INFO timeout_match 300000');
-  cmd('INFO max_memory 314572800');
-  await waitReady();
-  self.postMessage({ type: 'ready' });
-}
-
-async function doMove(board) {
-  await waitReady();
-  cmd('BOARD');
-  for (var i = 0; i < board.length; i++) {
-    var m = board[i];
-    cmd(m.c + ',' + m.r + ',' + (m.p === 1 ? 1 : 2));
+  var nnueFiles = [
+    'mix9svq-b1.bin','mix9svq-b2.bin','mix9svq-b3.bin',
+    'mix9svq-b4.bin','mix9svq-b5.bin','mix9svq-b6.bin',
+    'classical220723.bin'
+  ];
+  for (var i = 0; i < nnueFiles.length; i++) {
+    await fetchToFS('./nnue/' + nnueFiles[i], nnueFiles[i]);
   }
-  cmd('DONE');
-  return new Promise(function(resolve) {
-    pendingMove = { resolve: resolve };
-    setTimeout(function(){
-      if (pendingMove) { pendingMove = null; resolve(null); }
-    }, 10000);
-  });
-}
 
-async function newGame(rule) {
-  if (rule !== undefined) currentRule = rule;
-  engineReady = false;
-  cmd('START 15');
-  cmd('INFO rule ' + currentRule);
-  cmd('INFO timeout_turn 5000');
-  cmd('INFO max_memory 314572800');
+  cmd('isready');
   await waitReady();
   self.postMessage({ type: 'ready' });
+}
+
+// ★ 核心：move 與 hint 完全共用同一函式，保證引擎指令一致
+function requestMove(moves, boardSize, timeLimit) {
+  return new Promise(function(resolve) {
+    var sz = boardSize || 15;
+    var timeSec = Math.max(1, Math.round((timeLimit || 3000) / 1000));
+    var turn = (moves.length % 2 === 0) ? 'black' : 'white';
+
+    // 設定好 pendingMove（含 lastScore 暫存）
+    pendingMove = {
+      lastScore: null,
+      resolve: function(pos) {
+        var sc = pendingMove ? pendingMove.lastScore : null;
+        pendingMove = null;
+        resolve({ move: pos, score: sc });
+      }
+    };
+
+    // 送出指令序列
+    cmd('boardsize ' + sz);
+    cmd('clearboard');
+    for (var i = 0; i < moves.length; i++) {
+      var m = moves[i];
+      cmd('play ' + (m.p === 1 ? 'black' : 'white') + ' ' + m.c + ',' + m.r);
+    }
+    cmd('time_settings 0 ' + timeSec + ' 0');
+    cmd('genmove ' + turn);
+  });
 }
 
 self.onmessage = async function(e) {
   var d = e.data;
-  try {
-    switch (d.type) {
-      case 'init':    await initEngine(d.rule); break;
-      case 'move':    var m = await doMove(d.board); self.postMessage({ type: 'move', move: m }); break;
-      case 'newgame': await newGame(d.rule); break;
-      case 'stop':    cmd('STOP'); break;
-    }
-  } catch(err) {
-    self.postMessage({ type: 'error', text: err.message || String(err) });
+  switch (d.type) {
+
+    case 'init':
+      try { await initEngine(d.rule); }
+      catch(err) { self.postMessage({ type:'error', text: String(err) }); }
+      break;
+
+    case 'newgame':
+      engineReady = false;
+      pendingMove = null;
+      try { await initEngine(d.rule !== undefined ? d.rule : currentRule); }
+      catch(err) { self.postMessage({ type:'error', text: String(err) }); }
+      break;
+
+    // AI 走棋
+    case 'move':
+      try {
+        var result = await requestMove(d.board, d.boardSize, d.timeLimit);
+        self.postMessage({ type: 'move', move: result.move, score: result.score });
+      } catch(err) {
+        self.postMessage({ type: 'error', text: String(err) });
+      }
+      break;
+
+    // 提示（與 move 完全相同的引擎指令 → 結果一致）
+    case 'hint':
+      try {
+        var result = await requestMove(d.board, d.boardSize, d.timeLimit);
+        self.postMessage({ type: 'hint', move: result.move, score: result.score });
+      } catch(err) {
+        self.postMessage({ type: 'error', text: String(err) });
+      }
+      break;
   }
 };

@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五子棋 Gomoku – Rapfi AI</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    min-height: 100vh; color: #e0e0e0;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  h1 {
+    margin: 18px 0 6px;
+    font-size: 1.8rem; letter-spacing: 2px;
+    background: linear-gradient(90deg,#e0c97f,#f5e6a3,#e0c97f);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  #main {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 20px; padding: 10px 16px 30px;
+    width: 100%; max-width: 1100px;
+  }
+  #board-wrap {
+    position: relative;
+    background: #c8a96e;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px #0008;
+    padding: 30px;
+    flex-shrink: 0;
+  }
+  #board { display: block; cursor: crosshair; border-radius: 4px; }
+  #thinking-overlay {
+    display: none;
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.35);
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 1.4rem; color: #fff; letter-spacing: 2px;
+    pointer-events: none;
+  }
+  #thinking-overlay.show { display: flex; }
+  #sidebar {
+    display: flex; flex-direction: column; gap: 14px;
+    min-width: 220px; max-width: 280px; flex: 1;
+  }
+  .card {
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 12px; padding: 16px;
+  }
+  .card h3 {
+    font-size: .85rem; text-transform: uppercase;
+    letter-spacing: 1px; color: #aaa; margin-bottom: 10px;
+  }
+  #status-bar { display: flex; align-items: center; gap: 8px; font-size: .95rem; font-weight: 600; }
+  #status-dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #888; flex-shrink: 0; transition: background .3s;
+  }
+  #status-dot.loading  { background: #f0c040; animation: pulse 1s infinite; }
+  #status-dot.ready    { background: #4caf50; }
+  #status-dot.thinking { background: #2196f3; animation: pulse .7s infinite; }
+  #status-dot.error    { background: #f44336; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  #score-row { display: flex; justify-content: space-around; text-align: center; }
+  .score-item .label { font-size: .75rem; color: #aaa; margin-bottom: 4px; }
+  .score-item .num   { font-size: 1.6rem; font-weight: 700; }
+  .score-item.black .num { color: #ddd; }
+  .score-item.white .num { color: #f5e6a3; }
+  .score-item.draw  .num { color: #90caf9; }
+  .setting-row {
+    display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 8px;
+    font-size: .9rem;
+  }
+  .setting-row:last-child { margin-bottom: 0; }
+  select {
+    background: rgba(255,255,255,.1);
+    border: 1px solid rgba(255,255,255,.2);
+    color: #e0e0e0; border-radius: 6px;
+    padding: 4px 8px; font-size: .85rem; cursor: pointer;
+  }
+  select:focus { outline: none; }
+  .player-select-block { display: flex; flex-direction: column; gap: 8px; }
+  .player-row { display: flex; align-items: center; gap: 8px; }
+  .player-row .player-label {
+    font-size: .82rem; font-weight: 700; color: #ccc;
+    min-width: 38px;
+  }
+  .player-btn-group { display: flex; gap: 6px; flex: 1; }
+  .player-btn {
+    flex: 1; padding: 7px 6px;
+    border: 2px solid rgba(255,255,255,.15);
+    border-radius: 20px;
+    font-size: .82rem; font-weight: 700;
+    cursor: pointer; transition: all .18s;
+    background: rgba(255,255,255,.07);
+    color: #aaa;
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .player-btn:hover { filter: brightness(1.2); }
+  .player-btn.active {
+    background: linear-gradient(135deg,#b8860b,#f5c842);
+    border-color: #f5c842;
+    color: #1a1a1a;
+    box-shadow: 0 0 10px #f5c84255;
+  }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1; padding: 9px 6px;
+    border: none; border-radius: 8px;
+    font-size: .85rem; font-weight: 600;
+    cursor: pointer; transition: filter .15s, transform .1s;
+    min-width: 60px;
+  }
+  button:hover  { filter: brightness(1.15); }
+  button:active { transform: scale(.96); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #btn-new   { background: linear-gradient(135deg,#43a047,#66bb6a); color:#fff; }
+  #btn-undo  { background: linear-gradient(135deg,#1565c0,#42a5f5); color:#fff; }
+  #btn-hint  { background: linear-gradient(135deg,#6a1b9a,#ab47bc); color:#fff; }
+  #adv-label {
+    font-size: .82rem; font-weight: 700; text-align: center;
+    margin-bottom: 8px; min-height: 18px; color: #e0e0e0;
+    letter-spacing: .5px;
+  }
+  #adv-bar-wrap {
+    width: 100%; height: 22px;
+    border-radius: 11px;
+    background: rgba(255,255,255,.1);
+    overflow: hidden; position: relative;
+    border: 1px solid rgba(255,255,255,.15);
+  }
+  #adv-bar-black {
+    height: 100%; width: 50%;
+    background: linear-gradient(90deg, #555, #222);
+    transition: width .5s cubic-bezier(.4,0,.2,1);
+    border-radius: 11px 0 0 11px;
+    position: absolute; left: 0; top: 0;
+  }
+  #adv-bar-white {
+    height: 100%; width: 50%;
+    background: linear-gradient(90deg, #ddd, #fff);
+    transition: width .5s cubic-bezier(.4,0,.2,1);
+    border-radius: 0 11px 11px 0;
+    position: absolute; right: 0; top: 0;
+  }
+  #adv-pct-row {
+    display: flex; justify-content: space-between;
+    font-size: .75rem; color: #aaa; margin-top: 5px;
+  }
+  #adv-verdict {
+    margin-top: 10px; text-align: center;
+    font-size: .88rem; font-weight: 700;
+    padding: 6px 10px; border-radius: 8px;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.1);
+    min-height: 32px; color: #90caf9; letter-spacing: .5px;
+  }
+  #adv-verdict.black-win { color: #ddd; background: rgba(80,80,80,.3); border-color: #666; }
+  #adv-verdict.white-win { color: #f5e6a3; background: rgba(200,180,80,.15); border-color: #c8a96e; }
+  #adv-verdict.even      { color: #90caf9; background: rgba(33,150,243,.1); border-color: #2196f3; }
+  #move-log {
+    max-height: 160px; overflow-y: auto;
+    font-size: .78rem; line-height: 1.7; color: #ccc;
+  }
+  #move-log::-webkit-scrollbar { width: 4px; }
+  #move-log::-webkit-scrollbar-thumb { background:#555; border-radius:2px; }
+  #msg-box { font-size: .82rem; color: #90caf9; min-height: 18px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>&#9899; 五子棋 Gomoku &#9898;</h1>
+<div id="main">
+  <div id="board-wrap">
+    <canvas id="board"></canvas>
+    <div id="thinking-overlay">AI 思考中&#8230;</div>
+  </div>
+  <div id="sidebar">
+    <div class="card">
+      <h3>引擎狀態</h3>
+      <div id="status-bar">
+        <div id="status-dot" class="loading"></div>
+        <span id="status-text">載入中&#8230;</span>
+      </div>
+      <div id="msg-box" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h3>&#127942; 必勝分析</h3>
+      <div id="adv-label">尚未落子</div>
+      <div id="adv-bar-wrap">
+        <div id="adv-bar-black"></div>
+        <div id="adv-bar-white"></div>
+      </div>
+      <div id="adv-pct-row">
+        <span id="adv-pct-black">&#9899; 50%</span>
+        <span id="adv-pct-white">50% &#9898;</span>
+      </div>
+      <div id="adv-verdict" class="even">落子後將自動分析</div>
+    </div>
+    <div class="card">
+      <h3>比分</h3>
+      <div id="score-row">
+        <div class="score-item black">
+          <div class="label">黑棋</div>
+          <div class="num" id="sc-black">0</div>
+        </div>
+        <div class="score-item draw">
+          <div class="label">平局</div>
+          <div class="num" id="sc-draw">0</div>
+        </div>
+        <div class="score-item white">
+          <div class="label">白棋</div>
+          <div class="num" id="sc-white">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>設定</h3>
+      <div class="setting-row">
+        <span>規則</span>
+        <select id="sel-rule">
+          <option value="0">標準 (Standard)</option>
+          <option value="1">連珠 (Renju)</option>
+          <option value="4">自由 (Freestyle)</option>
+        </select>
+      </div>
+      <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px;margin-bottom:8px;">
+        <div class="player-select-block">
+          <div class="player-row">
+            <span class="player-label">&#9899; 黑棋</span>
+            <div class="player-btn-group">
+              <button class="player-btn active" id="btn-black-human" onclick="setPlayerType('black','human')">&#128100; 人類</button>
+              <button class="player-btn"        id="btn-black-ai"    onclick="setPlayerType('black','ai')">&#129302; AI</button>
+            </div>
+          </div>
+          <div class="player-row">
+            <span class="player-label">&#9898; 白棋</span>
+            <div class="player-btn-group">
+              <button class="player-btn"        id="btn-white-human" onclick="setPlayerType('white','human')">&#128100; 人類</button>
+              <button class="player-btn active" id="btn-white-ai"    onclick="setPlayerType('white','ai')">&#129302; AI</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span>思考時間</span>
+        <select id="sel-time">
+          <option value="1000">1 秒</option>
+          <option value="3000" selected>3 秒</option>
+          <option value="5000">5 秒</option>
+          <option value="10000">10 秒</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span>棋盤大小</span>
+        <select id="sel-size">
+          <option value="15" selected>15 × 15</option>
+          <option value="19">19 × 19</option>
+        </select>
+      </div>
+    </div>
+    <div class="card">
+      <div class="btn-row">
+        <button id="btn-new">新局</button>
+        <button id="btn-undo" disabled>悔棋</button>
+        <button id="btn-hint" disabled>提示</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>棋譜</h3>
+      <div id="move-log">尚無棋步</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+var CELL = 38;
+var PAD  = 24;
+var STONE_R_RATIO = 0.44;
+
+var boardSize = 15;
+var board     = [];
+var moves     = [];
+var gameOver  = false;
+var thinking  = false;
+var engineOK  = false;
+var scores    = { black:0, white:0, draw:0 };
+var hintCell  = null;
+var lastMove  = null;
+
+var blackType = 'human';
+var whiteType = 'ai';
+
+var canvas = document.getElementById('board');
+var ctx    = canvas.getContext('2d');
+
+// ── 執棋類型切換 ──────────────────────────────────────────────
+window.setPlayerType = function(color, type) {
+  if (color === 'black') {
+    blackType = type;
+    document.getElementById('btn-black-human').classList.toggle('active', type === 'human');
+    document.getElementById('btn-black-ai').classList.toggle('active',    type === 'ai');
+  } else {
+    whiteType = type;
+    document.getElementById('btn-white-human').classList.toggle('active', type === 'human');
+    document.getElementById('btn-white-ai').classList.toggle('active',    type === 'ai');
+  }
+  // 切換後若輪到 AI 則自動觸發
+  if (engineOK && !thinking && !gameOver) triggerAIIfNeeded();
+};
+
+function isHuman(player) {
+  return player === 1 ? blackType === 'human' : whiteType === 'human';
+}
+
+// ── Canvas 尺寸 ───────────────────────────────────────────────
+function resizeCanvas() {
+  var px = (boardSize - 1) * CELL + PAD * 2;
+  canvas.width = canvas.height = px;
+}
+
+// ── Worker ───────────────────────────────────────────────────
+var worker = null;
+
+function startWorker(rule) {
+  if (worker) { try { worker.terminate(); } catch(e){} }
+  worker = new Worker('./rapfi-worker.js');
+  worker.onmessage = onWorkerMsg;
+  worker.onerror   = function(e){ setStatus('error', 'Worker 錯誤: ' + e.message); };
+  worker.postMessage({ type:'init', rule: parseInt(rule) });
+}
+
+function onWorkerMsg(e) {
+  var d = e.data;
+  switch (d.type) {
+
+    case 'status':
+      setMsg(d.text);
+      break;
+
+    case 'ready':
+      engineOK = true;
+      setStatus('ready', 'Rapfi NNUE ✓');
+      // ★ 修正：明確告知使用者可以落子
+      var turn = currentTurn();
+      if (isHuman(turn)) {
+        setMsg('引擎就緒！輪到 ' + (turn === 1 ? '⚫ 黑棋' : '⚪ 白棋') + ' 落子');
+      }
+      refreshButtons();
+      if (!gameOver) triggerAIIfNeeded();
+      break;
+
+    case 'move':
+      thinking = false;
+      hideOverlay();
+      if (d.move) {
+        if (d.score !== null && d.score !== undefined) {
+          updateAdvantageByScore(d.score);
+        }
+        placeStone(d.move.c, d.move.r, currentTurn());
+      } else {
+        setMsg('AI 無法落子');
+        refreshButtons();
+      }
+      break;
+
+    case 'hint':
+      thinking = false;
+      hideOverlay();
+      if (d.move) {
+        hintCell = { c: d.move.c, r: d.move.r };
+        drawBoard();
+        setMsg('💡 最佳落子：' + colLabel(d.move.c) + (boardSize - d.move.r));
+        if (d.score !== null && d.score !== undefined) {
+          updateAdvantageByScore(d.score);
+        }
+      }
+      refreshButtons();
+      break;
+
+    case 'debug':
+      break;
+
+    case 'error':
+      thinking = false;
+      hideOverlay();
+      setStatus('error', '引擎錯誤: ' + d.text);
+      refreshButtons();
+      break;
+  }
+}
+
+// ── 必勝分析 ─────────────────────────────────────────────────
+function localHeuristic() {
+  var sz = boardSize;
+  var score = 0;
+  var dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  var weights = [0, 0, 10, 100, 1000, 100000];
+
+  function countLine(c, r, p, dc, dr) {
+    var cnt = 1, open = 0;
+    for (var s = 1; s < 5; s++) {
+      var nc = c+dc*s, nr = r+dr*s;
+      if (nc<0||nc>=sz||nr<0||nr>=sz) break;
+      if (board[nr*sz+nc] === p) cnt++;
+      else { if (board[nr*sz+nc] === 0) open++; break; }
+    }
+    for (var s = 1; s < 5; s++) {
+      var nc = c-dc*s, nr = r-dr*s;
+      if (nc<0||nc>=sz||nr<0||nr>=sz) break;
+      if (board[nr*sz+nc] === p) cnt++;
+      else { if (board[nr*sz+nc] === 0) open++; break; }
+    }
+    return { cnt: cnt, open: open };
+  }
+
+  for (var c = 0; c < sz; c++) {
+    for (var r = 0; r < sz; r++) {
+      var p = board[r*sz+c];
+      if (!p) continue;
+      for (var d = 0; d < dirs.length; d++) {
+        var res = countLine(c, r, p, dirs[d][0], dirs[d][1]);
+        var val = (weights[Math.min(res.cnt,5)] || 0) * (res.open + 1);
+        if (p === 1) score += val; else score -= val;
+      }
+    }
+  }
+  return score / 10;
+}
+
+function updateAdvantageByScore(score) {
+  var clamped = Math.max(-3000, Math.min(3000, score));
+  var blackPct = Math.round(50 + clamped / 60);
+  blackPct = Math.max(5, Math.min(95, blackPct));
+  renderAdvantage(blackPct);
+}
+
+function renderAdvantage(blackPct) {
+  var whitePct = 100 - blackPct;
+  document.getElementById('adv-label').textContent = '⚫ ' + blackPct + '%  vs  ' + whitePct + '% ⚪';
+  document.getElementById('adv-bar-black').style.width = blackPct + '%';
+  document.getElementById('adv-bar-white').style.width = whitePct + '%';
+  document.getElementById('adv-pct-black').textContent = '⚫ ' + blackPct + '%';
+  document.getElementById('adv-pct-white').textContent = whitePct + '% ⚪';
+  var vEl = document.getElementById('adv-verdict');
+  var verdict, cls;
+  if (blackPct >= 70)      { verdict = '⚫ 黑棋 優勢明顯'; cls = 'black-win'; }
+  else if (whitePct >= 70) { verdict = '⚪ 白棋 優勢明顯'; cls = 'white-win'; }
+  else if (blackPct >= 58) { verdict = '⚫ 黑棋 略佔優勢'; cls = 'black-win'; }
+  else if (whitePct >= 58) { verdict = '⚪ 白棋 略佔優勢'; cls = 'white-win'; }
+  else                     { verdict = '⚖️ 雙方均勢';      cls = 'even'; }
+  vEl.textContent = verdict;
+  vEl.className = cls;
+}
+
+function renderAdvantageWinner(winner) {
+  var blackPct = winner === 1 ? 95 : 5;
+  document.getElementById('adv-label').textContent = winner === 1 ? '⚫ 黑棋 必勝' : '⚪ 白棋 必勝';
+  document.getElementById('adv-bar-black').style.width = blackPct + '%';
+  document.getElementById('adv-bar-white').style.width = (100-blackPct) + '%';
+  document.getElementById('adv-pct-black').textContent = '⚫ ' + blackPct + '%';
+  document.getElementById('adv-pct-white').textContent = (100-blackPct) + '% ⚪';
+  var vEl = document.getElementById('adv-verdict');
+  vEl.textContent = winner === 1 ? '🏆 黑棋 獲勝！' : '🏆 白棋 獲勝！';
+  vEl.className   = winner === 1 ? 'black-win' : 'white-win';
+}
+
+function resetAdvantage() {
+  document.getElementById('adv-label').textContent = '尚未落子';
+  document.getElementById('adv-bar-black').style.width = '50%';
+  document.getElementById('adv-bar-white').style.width = '50%';
+  document.getElementById('adv-pct-black').textContent = '⚫ 50%';
+  document.getElementById('adv-pct-white').textContent = '50% ⚪';
+  var vEl = document.getElementById('adv-verdict');
+  vEl.textContent = '落子後將自動分析';
+  vEl.className = 'even';
+}
+
+// ── 繪圖 ─────────────────────────────────────────────────────
+function gx(c){ return PAD + c * CELL; }
+function gy(r){ return PAD + r * CELL; }
+function colLabel(c){ return 'ABCDEFGHJKLMNOPQRST'[c]; }
+
+function drawBoard() {
+  var sz = boardSize;
+  var px = canvas.width;
+  ctx.fillStyle = '#c8a96e';
+  ctx.fillRect(0, 0, px, px);
+
+  ctx.strokeStyle = '#7a5c2e'; ctx.lineWidth = 1;
+  for (var i = 0; i < sz; i++) {
+    ctx.beginPath(); ctx.moveTo(gx(i), gy(0));   ctx.lineTo(gx(i), gy(sz-1)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(gx(0), gy(i));   ctx.lineTo(gx(sz-1), gy(i)); ctx.stroke();
+  }
+
+  var stars = sz === 15
+    ? [[3,3],[3,11],[11,3],[11,11],[7,7]]
+    : [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]];
+  ctx.fillStyle = '#7a5c2e';
+  stars.forEach(function(s){
+    ctx.beginPath(); ctx.arc(gx(s[0]), gy(s[1]), 4, 0, Math.PI*2); ctx.fill();
+  });
+
+  var cols = 'ABCDEFGHJKLMNOPQRST';
+  ctx.fillStyle = '#5a3e1b'; ctx.font = '11px Arial';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (var i = 0; i < sz; i++) {
+    ctx.fillText(cols[i], gx(i), PAD/2);
+    ctx.fillText(cols[i], gx(i), px - PAD/2);
+    ctx.fillText(sz - i, PAD/2 - 2, gy(i));
+    ctx.fillText(sz - i, px - PAD/2 + 2, gy(i));
+  }
+
+  var r = CELL * STONE_R_RATIO;
+  for (var c = 0; c < sz; c++) {
+    for (var row = 0; row < sz; row++) {
+      var p = board[row * sz + c];
+      if (p) drawStone(c, row, p, r);
+    }
+  }
+
+  if (lastMove) {
+    var lx = gx(lastMove.c), ly = gy(lastMove.r);
+    ctx.strokeStyle = lastMove.p === 1 ? '#fff' : '#000';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(lx, ly, r * 0.38, 0, Math.PI*2); ctx.stroke();
+  }
+
+  if (hintCell) {
+    var hx = gx(hintCell.c), hy = gy(hintCell.r);
+    ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(hx, hy, r * 0.55, 0, Math.PI*2); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    var hs = r * 0.3;
+    ctx.beginPath(); ctx.moveTo(hx-hs, hy); ctx.lineTo(hx+hs, hy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(hx, hy-hs); ctx.lineTo(hx, hy+hs); ctx.stroke();
+  }
+}
+
+function drawStone(c, r, player, radius) {
+  var x = gx(c), y = gy(r), grad;
+  if (player === 1) {
+    grad = ctx.createRadialGradient(x-radius*.3, y-radius*.3, radius*.05, x, y, radius);
+    grad.addColorStop(0, '#888'); grad.addColorStop(1, '#111');
+  } else {
+    grad = ctx.createRadialGradient(x-radius*.3, y-radius*.3, radius*.05, x, y, radius);
+    grad.addColorStop(0, '#fff'); grad.addColorStop(1, '#bbb');
+  }
+  ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI*2);
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.strokeStyle = player === 1 ? '#000' : '#999';
+  ctx.lineWidth = 0.8; ctx.stroke();
+}
+
+// ── 遊戲邏輯 ─────────────────────────────────────────────────
+function currentTurn() {
+  return moves.length % 2 === 0 ? 1 : 2;
+}
+
+function initBoard() {
+  boardSize = parseInt(document.getElementById('sel-size').value);
+  resizeCanvas();
+  board    = new Array(boardSize * boardSize).fill(0);
+  moves    = [];
+  gameOver = false;
+  thinking = false;
+  hintCell = null;
+  lastMove = null;
+  resetAdvantage();
+  drawBoard();
+  updateLog();
+  refreshButtons();
+  if (engineOK && !gameOver) triggerAIIfNeeded();
+}
+
+function placeStone(c, r, player) {
+  if (gameOver) return;
+  if (board[r * boardSize + c] !== 0) return;
+
+  board[r * boardSize + c] = player;
+  moves.push({ c:c, r:r, p:player });
+  lastMove = { c:c, r:r, p:player };
+  hintCell = null;
+  drawBoard();
+  updateLog();
+
+  if (checkWin(c, r, player)) {
+    gameOver = true;
+    var wName = player === 1 ? '⚫ 黑棋' : '⚪ 白棋';
+    setMsg(wName + ' 獲勝！🎉');
+    setStatus('ready', wName + ' 獲勝！');
+    if (player === 1) scores.black++; else scores.white++;
+    updateScores();
+    renderAdvantageWinner(player);
+    refreshButtons();
+    return;
+  }
+  if (moves.length === boardSize * boardSize) {
+    gameOver = true; scores.draw++;
+    setMsg('平局！'); updateScores();
+    refreshButtons();
+    return;
+  }
+
+  // 本地評估先更新（快速反饋）
+  updateAdvantageByScore(localHeuristic());
+
+  // ★ 修正：落子後顯示下一手提示
+  var next = currentTurn();
+  if (isHuman(next)) {
+    setMsg('輪到 ' + (next === 1 ? '⚫ 黑棋' : '⚪ 白棋') + ' 落子');
+  }
+
+  refreshButtons();
+  triggerAIIfNeeded();
+}
+
+function triggerAIIfNeeded() {
+  if (gameOver || thinking || !engineOK) return;
+  var next = currentTurn();
+  if (!isHuman(next)) {
+    setTimeout(requestAIMove, 80);
+  }
+}
+
+function requestAIMove() {
+  if (!engineOK || thinking || gameOver) return;
+  thinking = true;
+  setStatus('thinking', 'AI 思考中…');
+  showOverlay('AI 思考中…');
+  refreshButtons();
+  worker.postMessage({
+    type: 'move',
+    board: moves,
+    boardSize: boardSize,
+    timeLimit: parseInt(document.getElementById('sel-time').value)
+  });
+}
+
+function requestHint() {
+  if (!engineOK || thinking || gameOver) return;
+  thinking = true;
+  setStatus('thinking', '計算最佳落子…');
+  showOverlay('計算中…');
+  refreshButtons();
+  worker.postMessage({
+    type: 'hint',
+    board: moves,
+    boardSize: boardSize,
+    timeLimit: parseInt(document.getElementById('sel-time').value)
+  });
+}
+
+// ── 勝負判斷 ─────────────────────────────────────────────────
+function checkWin(c, r, p) {
+  var dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  for (var d = 0; d < dirs.length; d++) {
+    var dc = dirs[d][0], dr = dirs[d][1], cnt = 1;
+    for (var s = 1; s < 5; s++) {
+      var nc = c+dc*s, nr = r+dr*s;
+      if (nc<0||nc>=boardSize||nr<0||nr>=boardSize||board[nr*boardSize+nc]!==p) break; cnt++;
+    }
+    for (var s = 1; s < 5; s++) {
+      var nc = c-dc*s, nr = r-dr*s;
+      if (nc<0||nc>=boardSize||nr<0||nr>=boardSize||board[nr*boardSize+nc]!==p) break; cnt++;
+    }
+    if (cnt >= 5) return true;
+  }
+  return false;
+}
+
+// ── ★ 修正後的 Canvas 點擊 ────────────────────────────────────
+canvas.addEventListener('click', function(e) {
+  // 遊戲結束或 AI 思考中，不接受點擊
+  if (gameOver || thinking) return;
+
+  // 引擎未就緒，給出明確提示而非靜默失敗
+  if (!engineOK) {
+    setMsg('引擎尚未就緒，請稍候…');
+    return;
+  }
+
+  var turn = currentTurn();
+
+  // 輪到 AI，不接受人類點擊
+  if (!isHuman(turn)) {
+    setMsg('請等待 AI 落子…');
+    return;
+  }
+
+  var rect  = canvas.getBoundingClientRect();
+  var scaleX = canvas.width  / rect.width;
+  var scaleY = canvas.height / rect.height;
+  var c = Math.round(((e.clientX - rect.left) * scaleX - PAD) / CELL);
+  var r = Math.round(((e.clientY - rect.top)  * scaleY - PAD) / CELL);
+
+  if (c < 0 || c >= boardSize || r < 0 || r >= boardSize) return;
+  if (board[r * boardSize + c] !== 0) {
+    setMsg('此處已有棋子，請換位置');
+    return;
+  }
+
+  placeStone(c, r, turn);
+});
+
+// ── UI 輔助 ───────────────────────────────────────────────────
+function showOverlay(txt) {
+  var el = document.getElementById('thinking-overlay');
+  el.textContent = txt || 'AI 思考中…';
+  el.classList.add('show');
+}
+function hideOverlay() {
+  document.getElementById('thinking-overlay').classList.remove('show');
+}
+function setStatus(cls, text) {
+  document.getElementById('status-dot').className    = cls;
+  document.getElementById('status-text').textContent = text;
+}
+function setMsg(t) { document.getElementById('msg-box').textContent = t; }
+function updateScores() {
+  document.getElementById('sc-black').textContent = scores.black;
+  document.getElementById('sc-white').textContent = scores.white;
+  document.getElementById('sc-draw').textContent  = scores.draw;
+}
+function updateLog() {
+  if (!moves.length) { document.getElementById('move-log').textContent = '尚無棋步'; return; }
+  var html = moves.map(function(m, i){
+    return '<span>' + (i+1) + '. ' + (m.p===1?'⚫':'⚪') + ' ' +
+           colLabel(m.c) + (boardSize - m.r) + '</span>';
+  }).join('  ');
+  var el = document.getElementById('move-log');
+  el.innerHTML = html;
+  el.scrollTop = el.scrollHeight;
+}
+function refreshButtons() {
+  var canAct   = engineOK && !thinking && !gameOver;
+  var hasMoves = moves.length > 0;
+  document.getElementById('btn-undo').disabled = !(canAct && hasMoves);
+  document.getElementById('btn-hint').disabled = !canAct;
+}
+
+// ── 按鈕事件 ─────────────────────────────────────────────────
+document.getElementById('btn-new').addEventListener('click', function(){
+  var rule = parseInt(document.getElementById('sel-rule').value);
+  var sz   = parseInt(document.getElementById('sel-size').value);
+  engineOK = false;
+  thinking = false;
+  setStatus('loading', '重新初始化…');
+  startWorker(rule);
+  boardSize = sz;
+  resizeCanvas();
+  board    = new Array(boardSize * boardSize).fill(0);
+  moves    = [];
+  gameOver = false;
+  hintCell = null;
+  lastMove = null;
+  resetAdvantage();
+  drawBoard();
+  updateLog();
+  refreshButtons();
+});
+
+document.getElementById('btn-undo').addEventListener('click', function(){
+  if (thinking || !moves.length || gameOver) return;
+
+  var stepsToUndo = 1;
+  if (moves.length >= 2) {
+    var prevPlayer = moves[moves.length - 1].p;
+    if (!isHuman(prevPlayer)) stepsToUndo = 2;
+  }
+  stepsToUndo = Math.min(stepsToUndo, moves.length);
+
+  for (var i = 0; i < stepsToUndo; i++) {
+    var m = moves.pop();
+    board[m.r * boardSize + m.c] = 0;
+  }
+  lastMove = moves.length ? moves[moves.length-1] : null;
+  hintCell = null;
+  gameOver = false;
+  drawBoard();
+  updateLog();
+  setMsg('已悔棋 ' + stepsToUndo + ' 步，輪到 ' + (currentTurn()===1?'⚫ 黑棋':'⚪ 白棋') + ' 落子');
+
+  if (moves.length === 0) resetAdvantage();
+  else updateAdvantageByScore(localHeuristic());
+
+  refreshButtons();
+  triggerAIIfNeeded();
+});
+
+document.getElementById('btn-hint').addEventListener('click', function(){
+  requestHint();
+});
+
+// ── 初始化 ───────────────────────────────────────────────────
+resizeCanvas();
+board = new Array(boardSize * boardSize).fill(0);
+drawBoard();
+startWorker(parseInt(document.getElementById('sel-rule').value));
+
+})();
+</script>
+</body>
+</html>
