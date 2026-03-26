@@ -91,8 +91,10 @@ async function initEngine(rule) {
   self.postMessage({ type: 'status', text: '載入模型...' });
 
   var nnueFiles = [
-    'mix9svq-b1.bin','mix9svq-b2.bin','mix9svq-b3.bin',
-    'mix9svq-b4.bin','mix9svq-b5.bin','mix9svq-b6.bin',
+    'mix9svqfreestyle_bsmix.bin.lz4',
+    'mix9svqstandard_bs15.bin.lz4',
+    'mix9svqrenju_bs15_black.bin.lz4',
+    'mix9svqrenju_bs15_white.bin.lz4',
     'classical220723.bin'
   ];
   for (var i = 0; i < nnueFiles.length; i++) {
