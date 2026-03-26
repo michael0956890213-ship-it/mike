@@ -46,6 +46,7 @@ function waitReady() {
   return new Promise(function(r){ readyResolvers.push(r); });
 }
 
+// ★ 解壓 lz4 並寫入 FS
 async function fetchToFS(url, fsName) {
   try {
     var resp = await fetch(url);
@@ -65,6 +66,7 @@ async function fetchToFS(url, fsName) {
   }
 }
 
+// ★ LZ4 Block 解壓
 function decodeLZ4(src) {
   var srcLen = src.length;
   var srcPos = 0;
@@ -154,12 +156,15 @@ async function initEngine(rule) {
 
   self.postMessage({ type: 'status', text: '初始化引擎...' });
 
-  // ✅ 關鍵修正：用變數 m 而非 this
-  Module = await new Promise(function(resolve) {
-    var m = Rapfi({
+  // ✅ 修正：直接在 onRuntimeInitialized callback 裡賦值給 Module
+  await new Promise(function(resolve) {
+    Rapfi({
       print:    function(t){ handleLine(t); },
-      printErr: function(t){},
-      onRuntimeInitialized: function() { resolve(m); }
+      printErr: function(t){ /* 忽略 stderr */ },
+      onRuntimeInitialized: function() {
+        Module = this;
+        resolve();
+      }
     });
   });
 
@@ -170,10 +175,10 @@ async function initEngine(rule) {
   } else {
     configName = 'gomocalc-mix9svq.toml';
     nnueFiles  = [
-      { url: 'mix9svqfreestyle_bsmix.bin.lz4',  fs: 'mix9svqfreestyle_bsmix.bin' },
-      { url: 'mix9svqstandard_bs15.bin.lz4',     fs: 'mix9svqstandard_bs15.bin' },
-      { url: 'mix9svqrenju_bs15_black.bin.lz4',  fs: 'mix9svqrenju_bs15_black.bin' },
-      { url: 'mix9svqrenju_bs15_white.bin.lz4',  fs: 'mix9svqrenju_bs15_white.bin' }
+      { url: 'mix9svqfreestyle_bsmix.bin.lz4',    fs: 'mix9svqfreestyle_bsmix.bin' },
+      { url: 'mix9svqstandard_bs15.bin.lz4',       fs: 'mix9svqstandard_bs15.bin' },
+      { url: 'mix9svqrenju_bs15_black.bin.lz4',    fs: 'mix9svqrenju_bs15_black.bin' },
+      { url: 'mix9svqrenju_bs15_white.bin.lz4',    fs: 'mix9svqrenju_bs15_white.bin' }
     ];
   }
 
